@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Nav, SectionLabel } from "../components";
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_BACKEND_URL;
 
 interface AskResponse {
   query: string;

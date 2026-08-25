@@ -1,0 +1,8 @@
+fastapi[all]
+uvicorn
+asyncpg
+redis
+python-dotenv
+google-genai
+langchain-text-splitters
+pydantic

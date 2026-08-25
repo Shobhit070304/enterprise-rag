@@ -1,0 +1,117 @@
+@import url("https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap");
+@import "tailwindcss";
+
+/* ── Design tokens (Tailwind v4 theme) ───────────────────── */
+@theme {
+  --font-sans:  "Courier Prime", "Courier New", monospace;
+  --font-serif: "IM Fell English", Georgia, serif;
+
+  --color-bg:       #201e1a;
+  --color-fg:       #f4efe4;
+  --color-subtle:   #9c9282;
+  --color-gold:     #c8a96e;
+  --color-gold-dim: #8a6f3e;
+  --color-rim:      #38342c;
+  --color-surface:  #1c1a16;
+  --color-ink:      #e0d8c8;
+  --color-danger:   #a0453a;
+}
+
+/* Keep :root vars available for pseudo-elements & raw CSS */
+:root {
+  --gold: #c8a96e;
+  --rim:  #38342c;
+  --bg:   #201e1a;
+}
+
+/* ── Base ─────────────────────────────────────────────────── */
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: #f4efe4;
+  font-family: "Courier Prime", "Courier New", monospace;
+  font-size: 16px;
+  line-height: 1.65;
+  overflow-x: hidden;
+}
+
+em {
+  font-style: italic;
+  font-family: "IM Fell English", Georgia, serif;
+}
+
+code {
+  font-family: "Courier Prime", monospace;
+  font-size: 0.88em;
+  background: rgba(255, 255, 255, 0.07);
+  padding: 0.1em 0.4em;
+}
+
+/* ── Jittery noise background ─────────────────────────────── */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.08'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+  opacity: 0.5;
+  animation: jitter 0.08s steps(1) infinite;
+}
+
+/* ── Scanlines ────────────────────────────────────────────── */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.08) 2px,
+    rgba(0, 0, 0, 0.08) 4px
+  );
+}
+
+/* ── Keyframes ────────────────────────────────────────────── */
+@keyframes jitter {
+  0%   { transform: translate(  0px,  0px); }
+  10%  { transform: translate( -1px,  1px); }
+  20%  { transform: translate(  1px, -1px); }
+  30%  { transform: translate( -2px,  0px); }
+  40%  { transform: translate(  0px,  2px); }
+  50%  { transform: translate(  1px,  1px); }
+  60%  { transform: translate( -1px, -2px); }
+  70%  { transform: translate(  2px,  1px); }
+  80%  { transform: translate( -1px,  0px); }
+  90%  { transform: translate(  0px, -1px); }
+  100% { transform: translate(  1px,  0px); }
+}
+
+@keyframes spin  { to { transform: rotate(360deg); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0;   } }
+
+/* ── Reusable animation helpers ───────────────────────────── */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--rim);
+  border-top-color: var(--gold);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.pulse-dot { animation: pulse 2s ease-in-out infinite; }
+
+/* Blinking cursor — used on hero title */
+.cursor::after {
+  content: "▌";
+  color: var(--gold);
+  animation: blink 1.1s step-end infinite;
+}

@@ -1,0 +1,55 @@
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environment
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Build & packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE & editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+
+# Next.js
+frontend/.next/
+frontend/out/
+frontend/.turbopack/
+frontend/.next/cache/
+
+# Next.js build output & type generation
+frontend/next-env.d.ts
+
+# Node dependencies
+frontend/node_modules/
+
+# Next.js local env overrides
+frontend/.env*.local

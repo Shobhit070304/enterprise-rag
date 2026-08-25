@@ -183,19 +183,16 @@ async def ingest_document(request:IngestRequest):
     return {"message":f"Successfully Ingested {len(chunks)} Chunks into Database"}
 
 
-@app.post("/retrieve")
-async def retrieve_hybrid_search(request: QueryResult, query_embedding:list = None):
-    if query_embedding is None:
-        query_embedding = client.models.embed_content(
+async def _hybrid_search(query: str, top_k: int, raw_embedding: list = None):
+    """Shared search logic used by /retrieve and /ask."""
+    if raw_embedding is None:
+        result = client.models.embed_content(
             model="gemini-embedding-001",
-            contents=request.query,
+            contents=query,
             config={"output_dimensionality": 768}
         )
-        raw_embedding = query_embedding.embeddings[0].values
-    else:
-        raw_embedding = query_embedding
+        raw_embedding = result.embeddings[0].values
 
-    
     query_vec_res = str(raw_embedding)
     async with app.state.pool.acquire() as conn:
         vector_rows = await conn.fetch("""
@@ -204,8 +201,7 @@ async def retrieve_hybrid_search(request: QueryResult, query_embedding:list = No
             ORDER BY embedding <=> $1::vector
             LIMIT 10;
         """, query_vec_res)
-
-        vector_results = [dict(rows) for rows in vector_rows]
+        vector_results = [dict(row) for row in vector_rows]
 
         keyword_rows = await conn.fetch("""
             SELECT id, content
@@ -213,16 +209,18 @@ async def retrieve_hybrid_search(request: QueryResult, query_embedding:list = No
             WHERE to_tsvector('english', content) @@ plainto_tsquery('english', $1)
             ORDER BY ts_rank(to_tsvector('english', content), plainto_tsquery('english', $1)) DESC
             LIMIT 10;
-        """, request.query)
-
-        keyword_results = [dict(rows) for rows in keyword_rows]
+        """, query)
+        keyword_results = [dict(row) for row in keyword_rows]
 
         fused_results = reciprocal_rank_fusion(vector_results, keyword_results)
-
         return {
-            "query":request.query,
-            "results":fused_results[:request.top_k]
+            "query": query,
+            "results": fused_results[:top_k]
         }
+
+@app.post("/retrieve")
+async def retrieve_hybrid_search(request: QueryResult):
+     return await _hybrid_search(request.query, request.top_k)
         
 @app.post("/ask")
 async def ask_rag(request:QueryResult, background_tasks:BackgroundTasks):
@@ -244,8 +242,8 @@ async def ask_rag(request:QueryResult, background_tasks:BackgroundTasks):
             "similarity": cache_result["similarity"]
         }
 
-    # 3. Cache Miss - Hybrid Search
-    retrieval_result = await retrieve_hybrid_search(request=QueryResult(query=request.query, top_k=request.top_k), query_embedding = raw_embedding)
+    # 3. Cache Miss - Hybrid Search (reuse precomputed embedding)
+    retrieval_result = await _hybrid_search(request.query, request.top_k, raw_embedding=raw_embedding)
     retrieved_docs = retrieval_result.get("results", [])
 
     if not retrieved_docs:

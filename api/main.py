@@ -61,7 +61,8 @@ async def lifeSpan(app:FastAPI):
             CREATE TABLE IF NOT EXISTS semantic_cache(
                 query_hash VARCHAR(64) PRIMARY KEY,
                 query_text TEXT NOT NULL,
-                embedding vector(768) NOT NULL
+                embedding vector(768) NOT NULL,
+                response TEXT NOT NULL
             )
         """)
         # HNSW index for vector similarity search
@@ -112,11 +113,11 @@ def reciprocal_rank_fusion(vector_results, keyword_results, k: int = 60):
 
 
 async def check_semantic_cache(app, query_embedding:list, threshold=0.95):
-    query_vec_str = str(query_embedding)
+    query_vec_str = "[" + ",".join(map(str, query_embedding.values)) + "]"
 
     async with app.state.pool.acquire() as conn:
         row = await conn.fetchrow("""
-            SELECT query_hash, (1 - (embedding <=> $1::vector)) AS similarity
+            SELECT query_hash, response, (1 - (embedding <=> $1::vector)) AS similarity
             FROM semantic_cache
             WHERE (1 - (embedding <=> $1::vector)) >= $2
             ORDER BY similarity DESC
@@ -125,23 +126,26 @@ async def check_semantic_cache(app, query_embedding:list, threshold=0.95):
 
         if row:
             query_hash = row["query_hash"]
+            # Try Redis first (fast). Fall back to Postgres (durable) if expired.
             cached_response = await app.state.redis.get(f"cache:{query_hash}")
-            if cached_response:
-                return {"hit": True, "answer":cached_response, "similarity":row["similarity"]}
+            answer = cached_response or row["response"]
+            if answer:
+                return {"hit": True, "answer": answer, "similarity": row["similarity"]}
     
     return {"hit": False}
 
 async def save_to_cache(app, query_text:str, query_embedding:list, llm_response:str):
     query_hash = hashlib.sha256(query_text.encode()).hexdigest()
-    query_vec_str = str(query_embedding)
+    query_vec_str = "[" + ",".join(map(str, query_embedding.values)) + "]"
 
     async with app.state.pool.acquire() as conn:
         await conn.execute("""
-            INSERT INTO semantic_cache(query_hash, query_text, embedding) 
-            VALUES($1, $2, $3::vector)
+            INSERT INTO semantic_cache(query_hash, query_text, embedding, response) 
+            VALUES($1, $2, $3::vector, $4)
             ON CONFLICT (query_hash) DO NOTHING;
-        """, query_hash, query_text, query_vec_str)
+        """, query_hash, query_text, query_vec_str, llm_response)
 
+    # Also cache in Redis for fast lookups (24h TTL)
     await app.state.redis.setex(f"cache:{query_hash}", 86400, llm_response)
     
     
@@ -175,7 +179,7 @@ async def ingest_document(request:IngestRequest):
 
     async with app.state.pool.acquire() as conn:
         for chunk, embedding in zip(chunks, responses.embeddings):
-            vec_str = str(embedding.values)
+            vec_str = "[" + ",".join(map(str, embedding.values)) + "]"
             await conn.execute(
                 "INSERT INTO documents (content, embedding) VALUES ($1, $2)",chunk, vec_str
             )
@@ -193,7 +197,8 @@ async def _hybrid_search(query: str, top_k: int, raw_embedding: list = None):
         )
         raw_embedding = result.embeddings[0].values
 
-    query_vec_res = str(raw_embedding)
+    # raw_embedding is already a plain list here — no .values attribute
+    query_vec_res = "[" + ",".join(map(str, raw_embedding)) + "]"
     async with app.state.pool.acquire() as conn:
         vector_rows = await conn.fetch("""
             SELECT id, content
@@ -268,7 +273,7 @@ async def ask_rag(request:QueryResult, background_tasks:BackgroundTasks):
     """
 
     response = client.models.generate_content(
-        model="gemini-3-flash-preview",
+        model="gemini-2.0-flash",
         contents=[system_prompt]
     )
     generated_text = response.text

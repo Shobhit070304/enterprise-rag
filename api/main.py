@@ -1,7 +1,7 @@
 # pyrefly: ignore [missing-import]
 from pydantic import Field
 # pyrefly: ignore [missing-import]
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, HTTPException
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -26,7 +26,7 @@ DB_URL = os.getenv("DB_URL")
 REDIS_URL = os.getenv("REDIS_URL")
 # Comma-separated origins. Defaults to * for local dev.
 # In production, set: CORS_ORIGINS=https://your-frontend.com
-CORS_ORIGINS = os.getenv("CORS_ORIGINS").split(",")
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
 
 @asynccontextmanager
 async def lifeSpan(app:FastAPI):
@@ -62,6 +62,11 @@ async def lifeSpan(app:FastAPI):
                 embedding vector(768) NOT NULL,
                 response TEXT NOT NULL
             )
+        """)
+        # Add response column if the table existed before this column was introduced
+        await conn.execute("""
+            ALTER TABLE semantic_cache
+            ADD COLUMN IF NOT EXISTS response TEXT;
         """)
         # HNSW index for vector similarity search
         await conn.execute("""
@@ -171,19 +176,14 @@ async def health_check():
         "message":"System running"
     }
 
-@app.post("/ingest", status_code=202)
-async def ingest_document(request:IngestRequest, background_tasks: BackgroundTasks):
-    background_tasks.add_task(_do_ingest, request.document_text)
-    return {"message":"Ingestion started in background"}
-
-
-async def _do_ingest(document_text:str):
+@app.post("/ingest")
+async def ingest_document(request: IngestRequest):
     try:
-        chunks = text_splitter.split_text(document_text)
-        
+        chunks = text_splitter.split_text(request.document_text)
+
         responses = client.models.embed_content(
-            model = "gemini-embedding-001",
-            contents=chunks,    
+            model="gemini-embedding-001",
+            contents=chunks,
             config={"output_dimensionality": 768}
         )
 
@@ -191,13 +191,12 @@ async def _do_ingest(document_text:str):
             for chunk, embedding in zip(chunks, responses.embeddings):
                 vec_str = "[" + ",".join(map(str, embedding.values)) + "]"
                 await conn.execute(
-                    "INSERT INTO documents (content, embedding) VALUES ($1, $2)",chunk, vec_str
+                    "INSERT INTO documents (content, embedding) VALUES ($1, $2)", chunk, vec_str
                 )
 
-        print(f"[INFO] Successfully ingested {len(chunks)} chunks.")
+        return {"message": f"Successfully ingested {len(chunks)} chunks into the database."}
     except Exception as e:
-        # HTTPException can't be raised in a background task — log the error instead
-        print(f"[ERROR] Ingestion failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Ingestion failed: {str(e)}")
 
 
 async def _hybrid_search(query: str, top_k: int, raw_embedding: list = None):
@@ -241,7 +240,7 @@ async def retrieve_hybrid_search(request: QueryResult):
      return await _hybrid_search(request.query, request.top_k)
         
 @app.post("/ask")
-async def ask_rag(request:QueryResult, background_tasks:BackgroundTasks):
+async def ask_rag(request:QueryResult):
     # 1. Embed Query
     try:
         query_embedding = client.models.embed_content(
@@ -290,7 +289,7 @@ async def ask_rag(request:QueryResult, background_tasks:BackgroundTasks):
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.5-flash-lite",
             contents=[system_prompt]
         )
         generated_text = response.text

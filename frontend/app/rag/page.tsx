@@ -34,7 +34,14 @@ export default function RagPage() {
         body: JSON.stringify({ document_text: ingestText }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail ?? "Ingestion failed");
+      if (!res.ok) {
+        const detail = data.detail;
+        // Validation errors (422) return detail as an array — show a simple message
+        const msg = Array.isArray(detail)
+          ? "Invalid input. Please check your fields."
+          : (detail ?? "Ingestion failed");
+        throw new Error(msg);
+      }
       setIngestMsg({ text: data.message });
       setIngestText("");
     } catch (e: unknown) {
@@ -56,7 +63,14 @@ export default function RagPage() {
         body: JSON.stringify({ query, top_k: topK }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail ?? "Query failed");
+      if (!res.ok) {
+        const detail = data.detail;
+        // Validation errors (422) return detail as an array — show a simple message
+        const msg = Array.isArray(detail)
+          ? "Invalid input. Please check your fields."
+          : (detail ?? "Query failed");
+        throw new Error(msg);
+      }
       setResults(data.results);
     } catch (e: unknown) {
       setQueryError(e instanceof Error ? e.message : "Unknown error");

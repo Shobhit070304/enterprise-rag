@@ -24,9 +24,7 @@ load_dotenv()
 
 DB_URL = os.getenv("DB_URL")
 REDIS_URL = os.getenv("REDIS_URL")
-# Comma-separated origins. Defaults to * for local dev.
-# In production, set: CORS_ORIGINS=https://your-frontend.com
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+CORS_ORIGINS = [os.getenv("CORS_ORIGINS", "*")]
 
 @asynccontextmanager
 async def lifeSpan(app:FastAPI):

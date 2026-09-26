@@ -1,4 +1,5 @@
 # pyrefly: ignore [missing-import]
+from pydantic import Field
 from functools import cached_property
 # pyrefly: ignore [missing-import]
 from fastapi import FastAPI, BackgroundTasks
@@ -24,6 +25,8 @@ import redis.asyncio as redis
 
 # pyrefly: ignore [missing-import]
 from fastapi.responses import StreamingResponse
+
+from fastapi import HTTPException
 
 load_dotenv()
 
@@ -113,13 +116,17 @@ def reciprocal_rank_fusion(vector_results, keyword_results, k: int = 60):
 
 
 async def check_semantic_cache(app, query_embedding:list, threshold=0.95):
-    query_vec_str = "[" + ",".join(map(str, query_embedding.values)) + "]"
+    # query_embedding is already a plain list — no .values attribute
+    query_vec_str = "[" + ",".join(map(str, query_embedding)) + "]"
 
     async with app.state.pool.acquire() as conn:
         row = await conn.fetchrow("""
-            SELECT query_hash, response, (1 - (embedding <=> $1::vector)) AS similarity
-            FROM semantic_cache
-            WHERE (1 - (embedding <=> $1::vector)) >= $2
+            SELECT query_hash, response, similarity
+            FROM (
+                SELECT query_hash, response, (1 - (embedding <=> $1::vector)) AS similarity
+                FROM semantic_cache
+            ) as sub
+            WHERE similarity >= $2
             ORDER BY similarity DESC
             LIMIT 1
         """, query_vec_str, threshold)
@@ -136,7 +143,8 @@ async def check_semantic_cache(app, query_embedding:list, threshold=0.95):
 
 async def save_to_cache(app, query_text:str, query_embedding:list, llm_response:str):
     query_hash = hashlib.sha256(query_text.encode()).hexdigest()
-    query_vec_str = "[" + ",".join(map(str, query_embedding.values)) + "]"
+    # query_embedding is already a plain list — no .values attribute
+    query_vec_str = "[" + ",".join(map(str, query_embedding)) + "]"
 
     async with app.state.pool.acquire() as conn:
         await conn.execute("""
@@ -154,11 +162,11 @@ async def save_to_cache(app, query_text:str, query_embedding:list, llm_response:
 
 
 class IngestRequest(BaseModel):
-    document_text:str
+    document_text:str = Field(..., min_length=1, max_length=50_000)
 
 class QueryResult(BaseModel):
-    query:str
-    top_k: int = 3
+    query:str = Field(..., min_length=1, max_length=1_000)
+    top_k: int = Field(3, ge=1, le=20)  # default=3, min=1, max=20 (inclusive)
 
 
 @app.get("/health")
@@ -168,23 +176,33 @@ async def health_check():
         "message":"System running"
     }
 
-@app.post("/ingest")
-async def ingest_document(request:IngestRequest):
-    chunks = text_splitter.split_text(request.document_text)
-    responses = client.models.embed_content(
-        model = "gemini-embedding-001",
-        contents=chunks,
-        config={"output_dimensionality": 768}
-    )
+@app.post("/ingest", status_code=202)
+async def ingest_document(request:IngestRequest, background_tasks: BackgroundTasks):
+    background_tasks.add_task(_do_ingest, request.document_text)
+    return {"message":"Ingestion started in background"}
 
-    async with app.state.pool.acquire() as conn:
-        for chunk, embedding in zip(chunks, responses.embeddings):
-            vec_str = "[" + ",".join(map(str, embedding.values)) + "]"
-            await conn.execute(
-                "INSERT INTO documents (content, embedding) VALUES ($1, $2)",chunk, vec_str
-            )
 
-    return {"message":f"Successfully Ingested {len(chunks)} Chunks into Database"}
+async def _do_ingest(document_text:str):
+    try:
+        chunks = text_splitter.split_text(document_text)
+        
+        responses = client.models.embed_content(
+            model = "gemini-embedding-001",
+            contents=chunks,    
+            config={"output_dimensionality": 768}
+        )
+
+        async with app.state.pool.acquire() as conn:
+            for chunk, embedding in zip(chunks, responses.embeddings):
+                vec_str = "[" + ",".join(map(str, embedding.values)) + "]"
+                await conn.execute(
+                    "INSERT INTO documents (content, embedding) VALUES ($1, $2)",chunk, vec_str
+                )
+
+        print(f"[INFO] Successfully ingested {len(chunks)} chunks.")
+    except Exception as e:
+        # HTTPException can't be raised in a background task — log the error instead
+        print(f"[ERROR] Ingestion failed: {e}")
 
 
 async def _hybrid_search(query: str, top_k: int, raw_embedding: list = None):
@@ -230,12 +248,15 @@ async def retrieve_hybrid_search(request: QueryResult):
 @app.post("/ask")
 async def ask_rag(request:QueryResult, background_tasks:BackgroundTasks):
     # 1. Embed Query
-    query_embedding = client.models.embed_content(
-        model="gemini-embedding-001",
-        contents=request.query,
-        config={"output_dimensionality": 768}
-    )
-    raw_embedding = query_embedding.embeddings[0].values
+    try:
+        query_embedding = client.models.embed_content(
+            model="gemini-embedding-001",
+            contents=request.query,
+            config={"output_dimensionality": 768}
+        )
+        raw_embedding = query_embedding.embeddings[0].values
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Embedding failed: {str(e)}")
 
     # 2. Semantic Cache Check
     cache_result = await check_semantic_cache(app, raw_embedding, threshold=0.95)
@@ -272,11 +293,14 @@ async def ask_rag(request:QueryResult, background_tasks:BackgroundTasks):
         {request.query}
     """
 
-    response = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=[system_prompt]
-    )
-    generated_text = response.text
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=[system_prompt]
+        )
+        generated_text = response.text
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM generation failed: {str(e)}")
     # 5. Cache the response
     await save_to_cache(app, request.query, raw_embedding, generated_text)
     return {
@@ -284,22 +308,6 @@ async def ask_rag(request:QueryResult, background_tasks:BackgroundTasks):
         "answer": generated_text,
         "source": "documents_retrieved",
     }
-
-    # response_stream = client.models.generate_content_stream(
-    #     model = "gemini-3-flash-preview",
-    #     contents=[system_prompt]
-    # )
-
-    # async def event_generator():
-    #     generated_text = ""
-    #     for chunk in response_stream:
-    #         if chunk.text:
-    #             generated_text += chunk.text
-    #             yield f"data:{chunk.text}\n\n"
-        
-    #     background_tasks.add_task(save_to_cache, app, request.query, query_embedding, generated_text)
-
-    # return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 

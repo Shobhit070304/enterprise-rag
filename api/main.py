@@ -1,8 +1,7 @@
 # pyrefly: ignore [missing-import]
 from pydantic import Field
-from functools import cached_property
 # pyrefly: ignore [missing-import]
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, HTTPException
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -16,22 +15,18 @@ from contextlib import asynccontextmanager
 from pydantic import BaseModel
 # pyrefly: ignore [missing-import]
 from google import genai
-
 # pyrefly: ignore [missing-import]
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
 # pyrefly: ignore [missing-import]
 import redis.asyncio as redis
-
-# pyrefly: ignore [missing-import]
-from fastapi.responses import StreamingResponse
-
-from fastapi import HTTPException
 
 load_dotenv()
 
 DB_URL = os.getenv("DB_URL")
 REDIS_URL = os.getenv("REDIS_URL")
+# Comma-separated origins. Defaults to * for local dev.
+# In production, set: CORS_ORIGINS=https://your-frontend.com
+CORS_ORIGINS = os.getenv("CORS_ORIGINS").split(",")
 
 @asynccontextmanager
 async def lifeSpan(app:FastAPI):
@@ -84,7 +79,7 @@ app = FastAPI(title="Enterprise RAG", lifespan=lifeSpan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
